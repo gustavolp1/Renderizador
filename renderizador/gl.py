@@ -33,6 +33,45 @@ class GL:
         GL.far = far
 
     @staticmethod
+    def coordsToPixel(x, y):
+        """Corrige as coordenadas para framebuffer."""
+        u = int(x / GL.width  * (GL.width  - 1))
+        v = int(y / GL.height * (GL.height - 1))
+        return u, v
+    
+    @staticmethod
+    def rgbRange(emissive):
+        """Conserta o range RGB de 0-1 para 0-255."""
+        return [max(0, min(255, int(round(c * 255)))) for c in emissive]
+    
+    @staticmethod
+    def boundPixel(u, v, rgb):
+        """Desenha um pixel no framebuffer, a não ser que esteja fora dos limites."""
+        if 0 <= u < GL.width and 0 <= v < GL.height:
+            gpu.GPU.draw_pixel([u, v], gpu.GPU.RGB8, rgb)
+
+    @staticmethod
+    def drawLineBresenham(u0, v0, u1, v1, rgb):
+        """Usa o algoritmo de Bresenham para desenhar uma linha entre dois pixels."""
+        du = abs(u1 - u0)
+        dv = -abs(v1 - v0)
+        su = 1 if u0 < u1 else -1
+        sv = 1 if v0 < v1 else -1
+        err = du + dv
+        u, v = u0, v0
+        while True:
+            GL.boundPixel(u, v, rgb)
+            if u == u1 and v == v1:
+                break
+            e2 = 2 * err
+            if e2 >= dv:
+                err += dv
+                u += su
+            if e2 <= du:
+                err += du
+                v += sv
+
+    @staticmethod
     def polypoint2D(point, colors):
         """Função usada para renderizar Polypoint2D."""
         # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/geometry2D.html#Polypoint2D
@@ -44,15 +83,12 @@ class GL:
         # O parâmetro colors é um dicionário com os tipos cores possíveis, para o Polypoint2D
         # você pode assumir inicialmente o desenho dos pontos com a cor emissiva (emissiveColor).
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Polypoint2D : pontos = {0}".format(point)) # imprime no terminal pontos
-        print("Polypoint2D : colors = {0}".format(colors)) # imprime no terminal as cores
+        rgb = GL.rgbRange(colors.get("emissiveColor", [1, 1, 1]))
 
-        # Exemplo:
-        pos_x = GL.width//2
-        pos_y = GL.height//2
-        gpu.GPU.draw_pixel([pos_x, pos_y], gpu.GPU.RGB8, [255, 0, 0])  # altera pixel (u, v, tipo, r, g, b)
-        # cuidado com as cores, o X3D especifica de (0,1) e o Framebuffer de (0,255)
+        for i in range(0, len(point), 2):
+            x, y = point[i], point[i+1]
+            u, v = GL.coordsToPixel(x, y)
+            GL.boundPixel(u, v, rgb)
         
     @staticmethod
     def polyline2D(lineSegments, colors):
@@ -68,14 +104,17 @@ class GL:
         # O parâmetro colors é um dicionário com os tipos cores possíveis, para o Polyline2D
         # você pode assumir inicialmente o desenho das linhas com a cor emissiva (emissiveColor).
 
-        print("Polyline2D : lineSegments = {0}".format(lineSegments)) # imprime no terminal
-        print("Polyline2D : colors = {0}".format(colors)) # imprime no terminal as cores
+        rgb = GL.rgbRange(colors.get("emissiveColor", [1, 1, 1]))
+
+        if len(lineSegments) < 4:
+            return
         
-        # Exemplo:
-        pos_x = GL.width//2
-        pos_y = GL.height//2
-        gpu.GPU.draw_pixel([pos_x, pos_y], gpu.GPU.RGB8, [255, 0, 255])  # altera pixel (u, v, tipo, r, g, b)
-        # cuidado com as cores, o X3D especifica de (0,1) e o Framebuffer de (0,255)
+        pts = [(lineSegments[i], lineSegments[i+1]) for i in range(0, len(lineSegments), 2)]
+
+        for a, b in zip(pts[:-1], pts[1:]):
+            u0, v0 = GL.coordsToPixel(a[0], a[1])
+            u1, v1 = GL.coordsToPixel(b[0], b[1])
+            GL.drawLineBresenham(u0, v0, u1, v1, rgb)
 
     @staticmethod
     def circle2D(radius, colors):
@@ -86,15 +125,21 @@ class GL:
         # O parâmetro colors é um dicionário com os tipos cores possíveis, para o Circle2D
         # você pode assumir o desenho das linhas com a cor emissiva (emissiveColor).
 
-        print("Circle2D : radius = {0}".format(radius)) # imprime no terminal
-        print("Circle2D : colors = {0}".format(colors)) # imprime no terminal as cores
-        
-        # Exemplo:
-        pos_x = GL.width//2
-        pos_y = GL.height//2
-        gpu.GPU.draw_pixel([pos_x, pos_y], gpu.GPU.RGB8, [255, 0, 255])  # altera pixel (u, v, tipo, r, g, b)
-        # cuidado com as cores, o X3D especifica de (0,1) e o Framebuffer de (0,255)
+        rgb = GL.rgbRange(colors.get("emissiveColor", [1, 1, 1]))
 
+        num_segments = 60  
+
+        points = []
+        for i in range(num_segments + 1):
+            theta = 2 * math.pi * i / num_segments
+            x = radius * math.cos(theta)
+            y = radius * math.sin(theta)
+            points.append((x, y))
+
+        for a, b in zip(points[:-1], points[1:]):
+            u0, v0 = GL.coordsToPixel(a[0], a[1])
+            u1, v1 = GL.coordsToPixel(b[0], b[1])
+            GL.drawLineBresenham(u0, v0, u1, v1, rgb)
 
     @staticmethod
     def triangleSet2D(vertices, colors):
@@ -107,12 +152,19 @@ class GL:
         # quantidade de pontos é sempre multiplo de 3, ou seja, 6 valores ou 12 valores, etc.
         # O parâmetro colors é um dicionário com os tipos cores possíveis, para o TriangleSet2D
         # você pode assumir inicialmente o desenho das linhas com a cor emissiva (emissiveColor).
-        print("TriangleSet2D : vertices = {0}".format(vertices)) # imprime no terminal
-        print("TriangleSet2D : colors = {0}".format(colors)) # imprime no terminal as cores
+        
+        rgb = GL.rgbRange(colors.get("emissiveColor", [1, 1, 1]))
 
-        # Exemplo:
-        gpu.GPU.draw_pixel([6, 8], gpu.GPU.RGB8, [255, 255, 0])  # altera pixel (u, v, tipo, r, g, b)
-
+        for i in range(0, len(vertices), 6):
+            x0, y0 = vertices[i],   vertices[i+1]
+            x1, y1 = vertices[i+2], vertices[i+3]
+            x2, y2 = vertices[i+4], vertices[i+5]
+            u0, v0 = GL.coordsToPixel(x0, y0)
+            u1, v1 = GL.coordsToPixel(x1, y1)
+            u2, v2 = GL.coordsToPixel(x2, y2)
+            GL.drawLineBresenham(u0, v0, u1, v1, rgb)
+            GL.drawLineBresenham(u1, v1, u2, v2, rgb)
+            GL.drawLineBresenham(u2, v2, u0, v0, rgb)
 
     @staticmethod
     def triangleSet(point, colors):
