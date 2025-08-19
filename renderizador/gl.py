@@ -6,9 +6,9 @@
 """
 Biblioteca Gráfica / Graphics Library.
 
-Desenvolvido por: <SEU NOME AQUI>
+Desenvolvido por: Gustavo Lindenberg Pacheco
 Disciplina: Computação Gráfica
-Data: <DATA DE INÍCIO DA IMPLEMENTAÇÃO>
+Data: 17/08/2025
 """
 
 import time         # Para operações com tempo
@@ -35,8 +35,8 @@ class GL:
     @staticmethod
     def coordsToPixel(x, y):
         """Corrige as coordenadas para framebuffer."""
-        u = int(x / GL.width  * (GL.width  - 1))
-        v = int(y / GL.height * (GL.height - 1))
+        u = int(x / GL.width  * (GL.width))
+        v = int(y / GL.height * (GL.height))
         return u, v
     
     @staticmethod
