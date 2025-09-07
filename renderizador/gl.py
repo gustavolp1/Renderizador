@@ -24,6 +24,11 @@ class GL:
     near = 0.01   # plano de corte próximo
     far = 1000    # plano de corte distante
 
+    model_stack = [np.identity(4)]
+    view_matrix = np.identity(4)
+    projection_matrix = np.identity(4)
+    viewport_matrix = None
+
     @staticmethod
     def setup(width, height, near=0.01, far=1000):
         """Definr parametros para câmera de razão de aspecto, plano próximo e distante."""
@@ -31,6 +36,7 @@ class GL:
         GL.height = height
         GL.near = near
         GL.far = far
+        GL.viewport(width, height)
 
     @staticmethod
     def coordsToPixel(x, y):
@@ -167,6 +173,17 @@ class GL:
             GL.drawLineBresenham(u2, v2, u0, v0, rgb)
 
     @staticmethod
+    def viewport(width, height):
+        GL.width = width
+        GL.height = height
+        GL.viewport_matrix = np.array([
+            [width/2,      0,          0, width/2],
+            [0,      -height/2,       0, height/2],
+            [0,           0,          1,        0],
+            [0,           0,          0,        1]
+        ])
+
+    @staticmethod
     def triangleSet(point, colors):
         """Função usada para renderizar TriangleSet."""
         # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/rendering.html#TriangleSet
@@ -183,12 +200,28 @@ class GL:
         # (emissiveColor), conforme implementar novos materias você deverá suportar outros
         # tipos de cores.
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("TriangleSet : pontos = {0}".format(point)) # imprime no terminal pontos
-        print("TriangleSet : colors = {0}".format(colors)) # imprime no terminal as cores
+        rgb = GL.rgbRange(colors.get("emissiveColor", [1, 1, 1]))
 
-        # Exemplo de desenho de um pixel branco na coordenada 10, 10
-        gpu.GPU.draw_pixel([10, 10], gpu.GPU.RGB8, [255, 255, 255])  # altera pixel
+        for i in range(0, len(point), 9):
+            verts = []
+            for j in range(3):
+                x, y, z = point[i+3*j], point[i+3*j+1], point[i+3*j+2]
+                v = np.array([x, y, z, 1.0])
+
+                v = GL.model_stack[-1] @ v
+                v = GL.view_matrix @ v
+                v = GL.projection_matrix @ v
+
+                if v[3] != 0:
+                    v = v / v[3]
+
+                v = GL.viewport_matrix @ v
+                verts.append((int(v[0]), int(v[1])))
+
+            (u0, v0), (u1, v1), (u2, v2) = verts
+            GL.drawLineBresenham(u0, v0, u1, v1, rgb)
+            GL.drawLineBresenham(u1, v1, u2, v2, rgb)
+            GL.drawLineBresenham(u2, v2, u0, v0, rgb)
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
@@ -197,11 +230,39 @@ class GL:
         # câmera virtual. Use esses dados para poder calcular e criar a matriz de projeção
         # perspectiva para poder aplicar nos pontos dos objetos geométricos.
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Viewpoint : ", end='')
-        print("position = {0} ".format(position), end='')
-        print("orientation = {0} ".format(orientation), end='')
-        print("fieldOfView = {0} ".format(fieldOfView))
+        px, py, pz = position
+        T = np.array([
+            [1, 0, 0, -px],
+            [0, 1, 0, -py],
+            [0, 0, 1, -pz],
+            [0, 0, 0,   1]
+        ])
+
+        R = np.identity(4)
+        if orientation and len(orientation) == 4:
+            x, y, z, t = orientation
+            norm = math.sqrt(x*x + y*y + z*z)
+            if norm > 0:
+                x, y, z = x/norm, y/norm, z/norm
+                c, s = math.cos(t), math.sin(t)
+                R = np.array([
+                    [c+(1-c)*x*x,   (1-c)*x*y - s*z, (1-c)*x*z + s*y, 0],
+                    [(1-c)*y*x+s*z, c+(1-c)*y*y,     (1-c)*y*z - s*x, 0],
+                    [(1-c)*z*x-s*y, (1-c)*z*y+s*x,   c+(1-c)*z*z,     0],
+                    [0, 0, 0, 1]
+                ])
+
+        GL.view_matrix = R @ T
+
+        aspect = GL.width / GL.height
+        f = 1.0 / math.tan(fieldOfView/2.0)
+        n, fz = GL.near, GL.far
+        GL.projection_matrix = np.array([
+            [f/aspect, 0, 0, 0],
+            [0, f, 0, 0],
+            [0, 0, (fz+n)/(n-fz), (2*fz*n)/(n-fz)],
+            [0, 0, -1, 0]
+        ])
 
     @staticmethod
     def transform_in(translation, scale, rotation):
@@ -216,15 +277,41 @@ class GL:
         # Quando começar a usar Transforms dentre de outros Transforms, mais a frente no curso
         # Você precisará usar alguma estrutura de dados pilha para organizar as matrizes.
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Transform : ", end='')
+        M = np.identity(4)
+
         if translation:
-            print("translation = {0} ".format(translation), end='') # imprime no terminal
+            tx, ty, tz = translation
+            M = np.array([
+                [1, 0, 0, tx],
+                [0, 1, 0, ty],
+                [0, 0, 1, tz],
+                [0, 0, 0, 1]
+            ]) @ M
+
         if scale:
-            print("scale = {0} ".format(scale), end='') # imprime no terminal
-        if rotation:
-            print("rotation = {0} ".format(rotation), end='') # imprime no terminal
-        print("")
+            sx, sy, sz = scale
+            M = np.array([
+                [sx, 0,  0, 0],
+                [0, sy,  0, 0],
+                [0, 0,  sz, 0],
+                [0, 0,  0, 1]
+            ]) @ M
+
+        if rotation and len(rotation) == 4:
+            x, y, z, t = rotation
+            norm = math.sqrt(x*x + y*y + z*z)
+            if norm > 0:
+                x, y, z = x/norm, y/norm, z/norm
+                c, s = math.cos(t), math.sin(t)
+                R = np.array([
+                    [c+(1-c)*x*x,   (1-c)*x*y - s*z, (1-c)*x*z + s*y, 0],
+                    [(1-c)*y*x+s*z, c+(1-c)*y*y,     (1-c)*y*z - s*x, 0],
+                    [(1-c)*z*x-s*y, (1-c)*z*y+s*x,   c+(1-c)*z*z,     0],
+                    [0, 0, 0, 1]
+                ])
+                M = R @ M
+
+        GL.model_stack.append(GL.model_stack[-1] @ M)
 
     @staticmethod
     def transform_out():
@@ -235,7 +322,9 @@ class GL:
         # pilha implementada.
 
         # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Saindo de Transform")
+        
+        if len(GL.model_stack) > 1:
+            GL.model_stack.pop()
 
     @staticmethod
     def triangleStripSet(point, stripCount, colors):
