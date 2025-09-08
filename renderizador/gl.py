@@ -174,14 +174,15 @@ class GL:
 
     @staticmethod
     def viewport(width, height):
-        GL.width = width
-        GL.height = height
+        """Configura a matriz de viewport (NDC -> coordenadas de tela)."""
+        GL.width = int(width)
+        GL.height = int(height)
         GL.viewport_matrix = np.array([
-            [width/2,      0,          0, width/2],
-            [0,      -height/2,       0, height/2],
-            [0,           0,          1,        0],
-            [0,           0,          0,        1]
-        ])
+            [GL.width / 2.0,        0.0,              0.0, GL.width / 2.0],
+            [0.0,             -GL.height / 2.0,      0.0, GL.height / 2.0],
+            [0.0,                   0.0,              1.0,          0.0],
+            [0.0,                   0.0,              0.0,          1.0]
+        ], dtype=float)
 
     @staticmethod
     def triangleSet(point, colors):
@@ -202,23 +203,41 @@ class GL:
 
         rgb = GL.rgbRange(colors.get("emissiveColor", [1, 1, 1]))
 
+        if GL.viewport_matrix is None:
+            GL.viewport(GL.width, GL.height)
+
         for i in range(0, len(point), 9):
             verts = []
+            skip = False
             for j in range(3):
-                x, y, z = point[i+3*j], point[i+3*j+1], point[i+3*j+2]
-                v = np.array([x, y, z, 1.0])
+                x = float(point[i + 3*j + 0])
+                y = float(point[i + 3*j + 1])
+                z = float(point[i + 3*j + 2])
+                v = np.array([x, y, z, 1.0], dtype=float)
 
                 v = GL.model_stack[-1] @ v
                 v = GL.view_matrix @ v
                 v = GL.projection_matrix @ v
 
-                if v[3] != 0:
-                    v = v / v[3]
+                if abs(v[3]) < 1e-8:
+                    skip = True
+                    break
 
-                v = GL.viewport_matrix @ v
-                verts.append((int(v[0]), int(v[1])))
+                v = v / v[3]
+                
+                vp = GL.viewport_matrix @ v
+                ux = int(round(vp[0]))
+                uy = int(round(vp[1]))
+                verts.append((ux, uy))
+
+            if skip or len(verts) != 3:
+                continue
 
             (u0, v0), (u1, v1), (u2, v2) = verts
+
+            if (u0 == u1 == u2) and (v0 == v1 == v2):
+                continue
+
             GL.drawLineBresenham(u0, v0, u1, v1, rgb)
             GL.drawLineBresenham(u1, v1, u2, v2, rgb)
             GL.drawLineBresenham(u2, v2, u0, v0, rgb)
@@ -230,39 +249,49 @@ class GL:
         # câmera virtual. Use esses dados para poder calcular e criar a matriz de projeção
         # perspectiva para poder aplicar nos pontos dos objetos geométricos.
 
-        px, py, pz = position
-        T = np.array([
-            [1, 0, 0, -px],
-            [0, 1, 0, -py],
-            [0, 0, 1, -pz],
-            [0, 0, 0,   1]
-        ])
+        px, py, pz = float(position[0]), float(position[1]), float(position[2])
 
-        R = np.identity(4)
+        T_pos = np.array([
+            [1.0, 0.0, 0.0, px],
+            [0.0, 1.0, 0.0, py],
+            [0.0, 0.0, 1.0, pz],
+            [0.0, 0.0, 0.0, 1.0]
+        ], dtype=float)
+
+        R_cam = np.identity(4, dtype=float)
         if orientation and len(orientation) == 4:
             x, y, z, t = orientation
+            x, y, z = float(x), float(y), float(z)
             norm = math.sqrt(x*x + y*y + z*z)
-            if norm > 0:
-                x, y, z = x/norm, y/norm, z/norm
+            if norm > 1e-12:
+                x, y, z = x / norm, y / norm, z / norm
                 c, s = math.cos(t), math.sin(t)
                 R = np.array([
-                    [c+(1-c)*x*x,   (1-c)*x*y - s*z, (1-c)*x*z + s*y, 0],
-                    [(1-c)*y*x+s*z, c+(1-c)*y*y,     (1-c)*y*z - s*x, 0],
-                    [(1-c)*z*x-s*y, (1-c)*z*y+s*x,   c+(1-c)*z*z,     0],
-                    [0, 0, 0, 1]
-                ])
+                    [c + (1-c)*x*x,     (1-c)*x*y - s*z,  (1-c)*x*z + s*y, 0.0],
+                    [(1-c)*y*x + s*z,   c + (1-c)*y*y,    (1-c)*y*z - s*x, 0.0],
+                    [(1-c)*z*x - s*y,   (1-c)*z*y + s*x,  c + (1-c)*z*z,   0.0],
+                    [0.0,               0.0,              0.0,             1.0]
+                ], dtype=float)
+                R_cam = R
 
-        GL.view_matrix = R @ T
+        camera_world = T_pos @ R_cam
 
-        aspect = GL.width / GL.height
-        f = 1.0 / math.tan(fieldOfView/2.0)
-        n, fz = GL.near, GL.far
+        try:
+            GL.view_matrix = np.linalg.inv(camera_world)
+        except np.linalg.LinAlgError:
+            GL.view_matrix = np.identity(4, dtype=float)
+
+        aspect = float(GL.width) / float(GL.height) if GL.height != 0 else 1.0
+        f = 1.0 / math.tan(float(fieldOfView) / 2.0)
+        n = float(GL.near)
+        fz = float(GL.far)
+
         GL.projection_matrix = np.array([
-            [f/aspect, 0, 0, 0],
-            [0, f, 0, 0],
-            [0, 0, (fz+n)/(n-fz), (2*fz*n)/(n-fz)],
-            [0, 0, -1, 0]
-        ])
+            [f / aspect, 0.0,        0.0,                     0.0],
+            [0.0,        f,          0.0,                     0.0],
+            [0.0,        0.0,  (fz + n) / (n - fz),  (2.0 * fz * n) / (n - fz)],
+            [0.0,        0.0,       -1.0,                     0.0]
+        ], dtype=float)
 
     @staticmethod
     def transform_in(translation, scale, rotation):
@@ -277,39 +306,43 @@ class GL:
         # Quando começar a usar Transforms dentre de outros Transforms, mais a frente no curso
         # Você precisará usar alguma estrutura de dados pilha para organizar as matrizes.
 
-        M = np.identity(4)
-
-        if translation:
-            tx, ty, tz = translation
-            M = np.array([
-                [1, 0, 0, tx],
-                [0, 1, 0, ty],
-                [0, 0, 1, tz],
-                [0, 0, 0, 1]
-            ]) @ M
+        S = np.identity(4, dtype=float)
+        R = np.identity(4, dtype=float)
+        T = np.identity(4, dtype=float)
 
         if scale:
-            sx, sy, sz = scale
-            M = np.array([
-                [sx, 0,  0, 0],
-                [0, sy,  0, 0],
-                [0, 0,  sz, 0],
-                [0, 0,  0, 1]
-            ]) @ M
+            sx, sy, sz = float(scale[0]), float(scale[1]), float(scale[2])
+            S = np.array([
+                [sx, 0.0, 0.0, 0.0],
+                [0.0, sy, 0.0, 0.0],
+                [0.0, 0.0, sz, 0.0],
+                [0.0, 0.0, 0.0, 1.0]
+            ], dtype=float)
 
         if rotation and len(rotation) == 4:
             x, y, z, t = rotation
+            x, y, z = float(x), float(y), float(z)
             norm = math.sqrt(x*x + y*y + z*z)
-            if norm > 0:
-                x, y, z = x/norm, y/norm, z/norm
+            if norm > 1e-12:
+                x, y, z = x / norm, y / norm, z / norm
                 c, s = math.cos(t), math.sin(t)
                 R = np.array([
-                    [c+(1-c)*x*x,   (1-c)*x*y - s*z, (1-c)*x*z + s*y, 0],
-                    [(1-c)*y*x+s*z, c+(1-c)*y*y,     (1-c)*y*z - s*x, 0],
-                    [(1-c)*z*x-s*y, (1-c)*z*y+s*x,   c+(1-c)*z*z,     0],
-                    [0, 0, 0, 1]
-                ])
-                M = R @ M
+                    [c + (1-c)*x*x,     (1-c)*x*y - s*z,  (1-c)*x*z + s*y, 0.0],
+                    [(1-c)*y*x + s*z,   c + (1-c)*y*y,    (1-c)*y*z - s*x, 0.0],
+                    [(1-c)*z*x - s*y,   (1-c)*z*y + s*x,  c + (1-c)*z*z,   0.0],
+                    [0.0,               0.0,              0.0,             1.0]
+                ], dtype=float)
+
+        if translation:
+            tx, ty, tz = float(translation[0]), float(translation[1]), float(translation[2])
+            T = np.array([
+                [1.0, 0.0, 0.0, tx],
+                [0.0, 1.0, 0.0, ty],
+                [0.0, 0.0, 1.0, tz],
+                [0.0, 0.0, 0.0, 1.0]
+            ], dtype=float)
+
+        M = T @ R @ S
 
         GL.model_stack.append(GL.model_stack[-1] @ M)
 
